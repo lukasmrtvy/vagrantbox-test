@@ -1,0 +1,64 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+VAGRANT_BOX = 'ubuntu/bionic64'
+VM_NAME = 'my-vm'
+VM_USER = 'vagrant'
+
+Vagrant.configure(2) do |config|
+  config.vm.box = VAGRANT_BOX
+  config.vm.hostname = VM_NAME
+  config.vm.provider "virtualbox" do |v|
+    v.name = VM_NAME
+    v.memory = 2048
+  end
+  config.vm.network "forwarded_port", guest: 80, host: 8080
+  config.vm.network "private_network", type: "dhcp"
+
+  config.ssh.shell = "bash -c 'BASH_ENV=/etc/profile exec bash'"
+
+  class Password
+      def to_s
+          begin
+          system 'stty -echo'
+          print "ansible-vault password: "
+          pass = URI.escape(STDIN.gets.chomp)
+          ensure
+          system 'stty echo'
+          end
+          pass
+      end
+  end
+
+  config.vm.provision "shell", env: {"PASSWORD" => Password.new}, inline: <<-SHELL
+        timedatectl set-timezone Europe/Prague
+        echo $PASSWORD > /tmp/vault_pass
+  SHELL
+
+  config.vm.provision "ansible_local" do |ansible|
+    ansible.playbook = "main.yml"
+    ansible.install_mode = "pip"
+    ansible.vault_password_file = "/tmp/vault_pass"
+  end
+
+  config.vm.provision "docker" do |d|
+    d.post_install_provision "shell", inline:"docker network create -d bridge my-network || true"
+    d.run "wordpress",
+      daemonize: true,
+      image: "wordpress:4.9.6-apache",
+      args: "-p 80:80 --network my-network -v /docker/wordpress:/tmp/secrets -e WORDPRESS_DB_HOST_FILE=/tmp/secrets_internal/wordpress_db_host -e WORDPRESS_DB_USER_FILE=/tmp/secrets_internal/wordpress_db_user -e WORDPRESS_DB_PASSWORD_FILE=/tmp/secrets_internal/wordpress_db_password -e WORDPRESS_DB_NAME_FILE=/tmp/secrets_internal/wordpress_db_name --entrypoint=/bin/bash",
+      cmd: "-c 'mkdir -p /tmp/secrets_internal; cp /tmp/secrets/* /tmp/secrets_internal; chmod 777 -R /tmp/secrets_internal ; docker-entrypoint.sh apache2-foreground'"
+    d.run "mariadb",
+      daemonize: true,
+      image: "mariadb:10.3.7",
+      args: " --network my-network -v /docker/mysql:/tmp/secrets -e MYSQL_ROOT_PASSWORD_FILE=/tmp/secrets_internal/mysql_root_password -e MYSQL_DATABASE_FILE=/tmp/secrets_internal/mysql_database -e MYSQL_USER_FILE=/tmp/secrets_internal/mysql_user -e MYSQL_PASSWORD_FILE=/tmp/secrets_internal/mysql_password --entrypoint=/bin/bash",
+      cmd: "-c 'mkdir -p /tmp/secrets_internal; cp /tmp/secrets/* /tmp/secrets_internal; chmod 777 -R /tmp/secrets_internal ; docker-entrypoint.sh mysqld'"
+  end
+
+  config.vm.provision "shell" do |f|
+    f.inline = <<-SHELL
+        rm -rf /tmp/vault_pass /docker/mysql/* /docker/wordpress/*
+      SHELL
+  end
+
+end
