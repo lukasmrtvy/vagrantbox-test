@@ -1,0 +1,38 @@
+---
+- hosts: all
+  remote_user: root
+  vars:
+    prefix: /docker
+  become: yes
+
+  tasks:
+
+    - include_vars:
+        file: secrets
+        name: mysecrets
+      no_log: true
+
+    - name: make sure that dir exists
+      file:
+        path: "{{prefix}}/{{ item.key.split('_')[0] |lower }}"
+        state: directory
+        owner: root
+        group: root
+        mode: 01700
+      with_dict:
+        "{{ mysecrets}}"
+
+    - name: make sure that file exists
+      file:
+        path: "{{prefix}}/{{ item.key.split('_')[0] |lower }}/{{ item.key|lower }}"
+        state: touch
+      with_dict:
+        "{{ mysecrets}}"
+
+    - name: add credentials to file
+      copy:
+        dest: "{{prefix}}/{{ item.key.split('_')[0] |lower }}/{{ item.key|lower }}"
+        content: "{{item.value}}"
+      with_dict:
+        "{{ mysecrets }}"
+      no_log: true
